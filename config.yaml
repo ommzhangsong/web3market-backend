@@ -1,0 +1,9 @@
+server:
+  port: 8080
+
+database:
+  username: "root"
+  password: "01903760243Zsong"
+  host: "127.0.0.1"
+  port: 3306
+  dbname: "campus_market"
