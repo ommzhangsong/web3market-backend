@@ -25,4 +25,10 @@ func InitDB() {
 	db.AutoMigrate(&User{})
 	DB = db
 	fmt.Println("✅ 数据库配置加载并连接成功")
+	DB.AutoMigrate(
+		&User{},    // 用户表
+		&Message{}, // 聊天记录表（刚才聊到的）
+		&Product{}, // 商品表（刚刚创建的）
+		&Order{},
+	)
 }

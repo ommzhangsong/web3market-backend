@@ -6,10 +6,12 @@ import (
 	"gin-campus-market/models"
 	"math/rand"
 	"net/smtp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jordan-wright/email"
+	"gorm.io/gorm"
 )
 
 // LoginRequest 定义前端发送的参数
@@ -20,28 +22,40 @@ type LoginRequest struct {
 // LoginHandler 处理模拟 Web3 登录
 func LoginHandler(c *gin.Context) {
 	var req LoginRequest
-
+	req.WalletAddress = strings.TrimSpace(req.WalletAddress)
 	// 1. 参数校验
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.Error(c, 400, "参数错误: 请提供钱包地址")
 		return
 	}
 
-	// 2. 数据库查询：是否存在该用户
 	var user models.User
+	// 1. 查数据库
 	result := models.DB.Where("wallet_address = ?", req.WalletAddress).First(&user)
 
+	// 2. 如果报错了
 	if result.Error != nil {
-		// 3. 如果没找到，说明是新用户，直接创建 (即注册)
-		user = models.User{
-			WalletAddress: req.WalletAddress,
-			IsVerified:    false, // 初始未验证校园邮箱
-		}
-		if err := models.DB.Create(&user).Error; err != nil {
-			common.Error(c, 500, "用户注册失败")
+		// 只有当错误确实是 "Record Not Found" 时，才去执行创建
+		if result.Error == gorm.ErrRecordNotFound {
+			user = models.User{
+				WalletAddress: req.WalletAddress,
+				IsVerified:    false,
+				CodeExpiresAt: time.Now(), // 加上我们刚才说的修复
+			}
+			// 执行创建
+			if err := models.DB.Create(&user).Error; err != nil {
+				common.Error(c, 500, "注册失败")
+				return
+			}
+		} else {
+			// 如果是其他数据库错误，报错返回
+			common.Error(c, 500, "数据库异常")
 			return
 		}
 	}
+
+	// 3. 运行到这里，说明要么查到了，要么创建成功了
+	// 直接生成 Token 即可
 
 	token, err := common.ReleaseToken(user.ID, user.WalletAddress)
 	if err != nil {
@@ -140,4 +154,33 @@ func VerifyEmailHandler(c *gin.Context) {
 	})
 
 	common.Success(c, "校园身份核验成功！")
+}
+
+// GetProfile 获取当前登录用户的详细信息
+func GetProfile(c *gin.Context) {
+	// 1. 从 Context 中获取中间件存入的 wallet_address
+	// 这是在 middleware.AuthMiddleware 中 c.Set("wallet_address", ...) 存进去的
+	walletAddress, exists := c.Get("wallet_address")
+	if !exists {
+		common.Error(c, 401, "未获取到登录信息")
+		return
+	}
+
+	var user models.User
+	// 2. 去数据库查一下最新的状态
+	// 这里不需要 Unscoped，因为正常操作的用户不应该是删除状态
+	if err := models.DB.Where("wallet_address = ?", walletAddress).First(&user).Error; err != nil {
+		common.Error(c, 404, "用户不存在")
+		return
+	}
+
+	// 3. 返回给前端
+	common.Success(c, gin.H{
+		"user": gin.H{
+			"id":             user.ID,
+			"wallet_address": user.WalletAddress,
+			"email":          user.Email,
+			"is_verified":    user.IsVerified,
+		},
+	})
 }

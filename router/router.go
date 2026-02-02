@@ -3,23 +3,22 @@ package router
 import (
 	"gin-campus-market/controller"
 	"gin-campus-market/middleware"
+	"gin-campus-market/service" // 假设你的聊天逻辑写在 service 包里
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
 
-// Cors 中间件：处理跨域问题，解决前端的 OPTIONS 404 错误
+// Cors 中间件保持不变
 func Cors() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method := c.Request.Method
-		// 允许前端所有来源访问，如果你知道前端的具体端口（如 http://localhost:3000），建议替换掉 "*"
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, AccessToken, X-CSRF-Token, Authorization, Token")
 		c.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, Content-Type")
 		c.Header("Access-Control-Allow-Credentials", "true")
 
-		// 如果是预检请求 (OPTIONS)，直接返回 204 (No Content) 即可
 		if method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
@@ -31,35 +30,51 @@ func Cors() gin.HandlerFunc {
 
 func SetupRouter() *gin.Engine {
 	r := gin.Default()
-
-	// 1. 注册跨域中间件（必须放在最前面）
 	r.Use(Cors())
-
-	// 基础测试接口
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(200, gin.H{"message": "pong"})
-	})
 
 	api := r.Group("/api")
 	{
-		// --- 公开路由 ---
-		auth := api.Group("/auth")
+		// === 商品公开接口 (无需登录) ===
+		api.GET("/products", controller.GetProductList)       // 获取商品列表
+		api.GET("/products/:id", controller.GetProductDetail) // 获取商品详情
+		r.Static("/uploads", "./uploads")
+		authGroup := api.Group("/auth")
 		{
-			// 登录不需要 Token
-			auth.POST("/login", controller.LoginHandler)
-		}
+			// 登录接口
+			authGroup.POST("/login", controller.LoginHandler)
 
-		// --- 需要身份验证的路由 ---
-		verified := api.Group("/auth")
-		verified.Use(middleware.AuthMiddleware())
-		{
+			// === 需验证路由组 ===
+			protected := authGroup.Group("")
+			protected.Use(middleware.AuthMiddleware())
+			{
+				// 原有用户逻辑
+				protected.GET("/me", controller.GetProfile)
+				protected.POST("/send-code", controller.SendCodeHandler)
+				protected.POST("/verify-email", controller.VerifyEmailHandler)
 
-			// 发送验证码
-			verified.POST("/send-code", controller.SendCodeHandler)
-			// 核验验证码
-			verified.POST("/verify-email", controller.VerifyEmailHandler)
+				// === 商品保护操作 ===
+				protected.POST("/products", controller.CreateProduct)       // 发布商品
+				protected.DELETE("/products/:id", controller.DeleteProduct) // 删除商品
+
+				// === 聊天逻辑 (保持不变) ===
+				protected.GET("/ws", func(c *gin.Context) {
+					val, _ := c.Get("wallet_address")
+					walletAddr, _ := val.(string)
+					service.HandleChat(c.Writer, c.Request, walletAddr)
+				})
+				protected.GET("/chat/messages/:target_id", controller.GetChatHistory)
+				protected.GET("/chat/sessions", controller.GetChatSessions)
+				protected.POST("/chat/read", controller.MarkAsRead)
+				protected.POST("/upload", controller.UploadFile)
+				// 在 protected 路由组内添加
+				protected.GET("/my-products", controller.GetMyProducts)
+				protected.PUT("/products/:id", controller.UpdateProduct)
+				protected.POST("/confirm-purchase", controller.ConfirmPurchase)
+				protected.POST("/confirm-receipt", controller.ConfirmReceipt)
+				protected.POST("/orders", controller.CreateOrder)
+				protected.GET("/orders/my", controller.GetMyOrders)
+			}
 		}
 	}
-
 	return r
 }
